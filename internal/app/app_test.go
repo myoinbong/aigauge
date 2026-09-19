@@ -413,14 +413,27 @@ func TestAddProviderInstanceLabelsSubsequentInstancesOfTheSameType(t *testing.T)
 	}
 }
 
-func TestAddProviderInstanceRejectsSecondAntigravity(t *testing.T) {
+func TestAddProviderInstanceAllowsMultipleAntigravity(t *testing.T) {
 	withIsolatedStores(t)
 	app := NewApp(nil, nil, nil, nil, nil, nil, nil)
-	if _, err := app.AddProviderInstance("antigravity"); err != nil {
+	first, err := app.AddProviderInstance("antigravity")
+	if err != nil {
 		t.Fatalf("first AddProviderInstance(antigravity) error = %v", err)
 	}
-	if _, err := app.AddProviderInstance("antigravity"); err == nil {
-		t.Fatal("second AddProviderInstance(antigravity) succeeded, want an error")
+	second, err := app.AddProviderInstance("antigravity")
+	if err != nil {
+		t.Fatalf("second AddProviderInstance(antigravity) error = %v", err)
+	}
+	if first.ID == second.ID {
+		t.Fatalf("expected unique IDs, got %q for both", first.ID)
+	}
+
+	if err := app.SetAntigravityConfig(second.ID, "wsl", "Ubuntu"); err != nil {
+		t.Fatalf("SetAntigravityConfig failed: %v", err)
+	}
+	target := app.antigravityTargetForInstance(second.ID)
+	if target.Mode != "wsl" || target.WslDistro != "Ubuntu" {
+		t.Fatalf("unexpected target: %+v", target)
 	}
 }
 

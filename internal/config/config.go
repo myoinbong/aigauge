@@ -21,6 +21,10 @@ type ProviderInstance struct {
 	// behind with this still true if the app is closed or crashes mid-login;
 	// App.loadSettingsLocked drops any such orphan on the next startup.
 	Pending bool `json:"pending,omitempty"`
+
+	// Antigravity CLI execution configuration
+	AgyMode   string `json:"agyMode,omitempty"`   // "native" (default) or "wsl"
+	WslDistro string `json:"wslDistro,omitempty"` // optional WSL distro name
 }
 
 const DefaultRefreshInterval = 180

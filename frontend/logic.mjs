@@ -85,7 +85,8 @@ export function providerTypeLabel(type) {
 }
 
 export function shouldShowProviderUser(providers, type, user) {
-	if (!user || !['codex', 'claude'].includes(type) || !Array.isArray(providers)) return false;
+  if (!user || !['codex', 'claude', 'antigravity'].includes(type) || !Array.isArray(providers)) return false;
+  if (type === 'antigravity') return true;
   return providers.filter(instance => instance?.type === type).length > 1;
 }
 
@@ -97,10 +98,16 @@ export function normalizeProviderInstance(raw) {
   if (!raw || typeof raw !== 'object') return null;
   if (typeof raw.id !== 'string' || !raw.id) return null;
   if (!PROVIDER_TYPE_IDS.includes(raw.type)) return null;
-  const label = typeof raw.label === 'string' && raw.label.trim() ? raw.label : providerTypeLabel(raw.type);
+  let label = typeof raw.label === 'string' && raw.label.trim() ? raw.label : providerTypeLabel(raw.type);
+  if (raw.type === 'antigravity' && raw.agyMode === 'wsl' && label === 'Antigravity') {
+    label = raw.wslDistro ? `Antigravity (${raw.wslDistro})` : 'Antigravity (WSL)';
+  }
   const refreshInterval = Number(raw.refreshInterval);
-  return { id: raw.id, type: raw.type, label,
+  const res = { id: raw.id, type: raw.type, label,
     refreshInterval: PROVIDER_REFRESH_OPTIONS.includes(refreshInterval) ? refreshInterval : DEFAULT_REFRESH_SECONDS };
+  if (raw.agyMode) res.agyMode = raw.agyMode;
+  if (raw.wslDistro) res.wslDistro = raw.wslDistro;
+  return res;
 }
 
 // Normalizes a whole stored provider list: drops unsalvageable entries and

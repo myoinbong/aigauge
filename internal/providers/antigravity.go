@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -36,31 +38,78 @@ const (
 	// the 30s --print-timeout handed to agy itself so the CLI gets the chance to
 	// report its own timeout before this one kills it.
 	antigravityUsageTimeout = 45 * time.Second
-
-	// antigravityModelsTimeout bounds the optional `agy models` follow-up, which
-	// only ever runs to disambiguate a failure that already happened.
-	antigravityModelsTimeout = 30 * time.Second
 )
 
+// buildAgyCommand constructs the executable and argument slice for either native or WSL execution.
+func buildAgyCommand(target AgyTarget, agyPath string, args ...string) (string, []string) {
+	if target.Mode == "wsl" {
+		wslArgs := make([]string, 0, len(args)+6)
+		if target.WslDistro != "" {
+			wslArgs = append(wslArgs, "-d", target.WslDistro)
+		}
+		wslArgs = append(wslArgs, "--exec", "/bin/bash", "-lc", `exec agy "$@"`, "_")
+		wslArgs = append(wslArgs, args...)
+		return "wsl.exe", wslArgs
+	}
+	return agyPath, args
+}
+
+func runAgyTarget(ctx context.Context, runner commandRunner, target AgyTarget, agyPath string, args ...string) (commandResult, error) {
+	suppressAgyUpdaterFlashes(target)
+	exe, cmdArgs := buildAgyCommand(target, agyPath, args...)
+	return runner.run(ctx, exe, cmdArgs...)
+}
+
+func suppressAgyUpdaterFlashes(target AgyTarget) {
+	if target.Mode == "wsl" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return
+	}
+	timestampPath := filepath.Join(home, ".gemini", "antigravity-cli", "last_check.timestamp")
+	now := time.Now()
+	if err := os.Chtimes(timestampPath, now, now); err != nil {
+		dir := filepath.Dir(timestampPath)
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			_ = os.WriteFile(timestampPath, nil, 0o644)
+		}
+	}
+}
+
+func findAgyTarget(target AgyTarget, deps providerDeps) (string, Diagnosis, bool) {
+	if target.Mode == "wsl" {
+		wslPath, _ := resolveExecutable("wsl.exe", nil, deps)
+		if wslPath == "" {
+			wslPath = "wsl.exe"
+		}
+		return wslPath, Diagnosis{}, true
+	}
+	return findAgy(deps)
+}
+
 // EnsureAntigravityCLI verifies that agy is installed and authenticated.
-// The usage command itself is intentionally kept on the CLI path: unlike the
-// local Hub APIs, `agy -p /usage` includes the weekly quota information shown
-// by the CLI.
 func EnsureAntigravityCLI() Diagnosis {
+	return EnsureAntigravityCLIWithTarget(AgyTarget{Mode: "native"})
+}
+
+// EnsureAntigravityCLIWithTarget verifies that agy is installed and authenticated for the given target.
+func EnsureAntigravityCLIWithTarget(target AgyTarget) Diagnosis {
 	deps := defaultDeps()
-	agyPath, notInstalled, found := findAgy(deps)
+	agyPath, notInstalled, found := findAgyTarget(target, deps)
 	if !found {
 		return notInstalled
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), statusCommandTimeout)
 	defer cancel()
-	return checkAntigravityModels(ctx, deps.runner, agyPath, "agy authentication confirmed.")
+	return checkAntigravityAuth(ctx, deps.runner, target, agyPath, "agy authentication confirmed.")
 }
 
-func checkAntigravityModels(ctx context.Context, runner commandRunner, agyPath, successMessage string) Diagnosis {
-	result, err := runner.run(ctx, agyPath, "models")
+func checkAntigravityAuth(ctx context.Context, runner commandRunner, target AgyTarget, agyPath, successMessage string) Diagnosis {
+	result, err := runAgyTarget(ctx, runner, target, agyPath, "-p", "/usage", "--output-format", "json", "--print-timeout", "15s")
 	if err != nil {
-		return Diagnosis{Status: StatusTemporaryError, Message: "Could not check Antigravity models.", Details: technicalDetails(err.Error())}
+		return Diagnosis{Status: StatusTemporaryError, Message: "Could not check Antigravity authentication.", Details: technicalDetails(err.Error())}
 	}
 	details := strings.TrimSpace(result.Stderr)
 	if details == "" {
@@ -73,7 +122,7 @@ func checkAntigravityModels(ctx context.Context, runner commandRunner, agyPath, 
 		if containsAnyMarker(details, unsupportedCLIMarkers) {
 			return Diagnosis{Status: StatusUnsupportedCLI, Message: unsupportedCLIMessage("Antigravity CLI", antigravityInstallGuideURL), Details: technicalDetails(details)}
 		}
-		return Diagnosis{Status: StatusTemporaryError, Message: "Could not check Antigravity models.", Details: technicalDetails(details)}
+		return Diagnosis{Status: StatusTemporaryError, Message: "Could not check Antigravity authentication.", Details: technicalDetails(details)}
 	}
 	return Diagnosis{Status: StatusConnected, Message: successMessage}
 }
@@ -130,7 +179,12 @@ func antigravityOrder(window string) int {
 // ToDisplay resolves each bucket's window into a display label and a stable
 // 5h/24h/weekly order, and its fraction into a percentage.
 func (u AntigravityUsage) ToDisplay() DisplayUsage {
-	display := DisplayUsage{FetchedAt: u.FetchedAt, DiagnosisFields: u.DiagnosisFields}
+	display := DisplayUsage{
+		FetchedAt:       u.FetchedAt,
+		DiagnosisFields: u.DiagnosisFields,
+		User:            u.User,
+		Email:           u.User,
+	}
 	if u.Status != StatusConnected {
 		return display
 	}
@@ -157,33 +211,32 @@ func (u AntigravityUsage) ToDisplay() DisplayUsage {
 	return display
 }
 
-// GetAntigravityUsage runs the real, agy-CLI-backed usage lookup. tokenKey is
-// accepted only to match the other providers' per-instance signature: agy
-// manages a single local session of its own, so every Antigravity instance
-// reflects that same session rather than a credential AI Gauge stores itself.
+// GetAntigravityUsage runs the real, agy-CLI-backed usage lookup for native target.
 func GetAntigravityUsage(tokenKey string) AntigravityUsage {
-	return getAntigravityUsage(context.Background(), defaultDeps(), tokenKey, true)
+	return GetAntigravityUsageWithTarget(tokenKey, AgyTarget{Mode: "native"})
 }
 
-// FetchAntigravityRawUsage returns agy's unconverted `/usage` stdout. Used by
-// hack/fixtures/fixtures.go to capture the CLI's actual response shape for
-// fixture development.
-func FetchAntigravityRawUsage(_ string) ([]byte, error) {
+// GetAntigravityUsageWithTarget runs the agy-CLI-backed usage lookup for the given target (native or WSL).
+func GetAntigravityUsageWithTarget(tokenKey string, target AgyTarget) AntigravityUsage {
+	return getAntigravityUsage(context.Background(), defaultDeps(), tokenKey, target, true)
+}
+
+// FetchAntigravityRawUsage returns agy's unconverted `/usage` stdout for native target.
+func FetchAntigravityRawUsage(tokenKey string) ([]byte, error) {
+	return FetchAntigravityRawUsageWithTarget(tokenKey, AgyTarget{Mode: "native"})
+}
+
+// FetchAntigravityRawUsageWithTarget returns agy's unconverted `/usage` stdout for the given target.
+func FetchAntigravityRawUsageWithTarget(_ string, target AgyTarget) ([]byte, error) {
 	deps := defaultDeps()
-	agyPath, notInstalled, found := findAgy(deps)
+	agyPath, notInstalled, found := findAgyTarget(target, deps)
 	if !found {
 		return nil, errors.New(notInstalled.Message)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), antigravityUsageTimeout)
 	defer cancel()
-	modelsCtx, cancel := context.WithTimeout(ctx, antigravityModelsTimeout)
-	defer cancel()
-	models := checkAntigravityModels(modelsCtx, deps.runner, agyPath, "agy authentication confirmed.")
-	if models.Status != StatusConnected {
-		return nil, errors.New(models.Message)
-	}
-	result, err := deps.runner.run(ctx, agyPath, "-p", "/usage", "--output-format", "json", "--print-timeout", "30s")
+	result, err := runAgyTarget(ctx, deps.runner, target, agyPath, "-p", "/usage", "--output-format", "json", "--print-timeout", "30s")
 	if err != nil {
 		return nil, err
 	}
@@ -208,35 +261,23 @@ func findAgy(deps providerDeps) (string, Diagnosis, bool) {
 	return path, Diagnosis{}, true
 }
 
-// diagnoseAntigravityLocal answers with what can be known offline: whether agy
-// is installed and whether its version is supported. It never runs `/usage`,
-// which makes it the safe call for the onboarding screen. tokenKey is unused
-// (see GetAntigravityUsage) but kept to match DiagnoseClaude/DiagnoseCodex's
-// per-instance signature.
-func diagnoseAntigravityLocal(ctx context.Context, deps providerDeps, _ string) Diagnosis {
-	agyPath, notInstalled, ok := findAgy(deps)
+func diagnoseAntigravityLocal(ctx context.Context, deps providerDeps, tokenKey string) Diagnosis {
+	return diagnoseAntigravityLocalWithTarget(ctx, deps, tokenKey, AgyTarget{Mode: "native"})
+}
+
+func diagnoseAntigravityLocalWithTarget(ctx context.Context, deps providerDeps, _ string, target AgyTarget) Diagnosis {
+	agyPath, notInstalled, ok := findAgyTarget(target, deps)
 	if !ok {
 		return notInstalled
 	}
-	diagnosis, _ := diagnoseAntigravity(ctx, deps.runner, agyPath, false)
+	diagnosis, _ := diagnoseAntigravity(ctx, deps.runner, target, agyPath, false)
 	return diagnosis
 }
 
-// diagnoseAntigravity reports Antigravity's readiness. agy is the only
-// provider whose CLI is genuinely required, because the usage lookup *is* an
-// agy command - there is no credential file to fall back to, and reading
-// agy's own local token store to call Google's API directly is deliberately
-// avoided (see docs/privacy-policy.md): Google's terms treat that as a
-// third-party tool using an Antigravity login. It also has no local sign-in
-// command (`agy auth status` does not exist through 1.1.28), so the network
-// gate sits earlier here: `--version` is checked first, network-free, for
-// every caller including an active one - a broken or incompatible CLI is then
-// reported without ever attempting the heavier `/usage` request, and the
-// version state itself only comes back with `/usage`.
-func diagnoseAntigravity(ctx context.Context, runner commandRunner, agyPath string, active bool) (Diagnosis, bool) {
+func diagnoseAntigravity(ctx context.Context, runner commandRunner, target AgyTarget, agyPath string, active bool) (Diagnosis, bool) {
 	ctx, cancel := context.WithTimeout(ctx, statusCommandTimeout)
 	defer cancel()
-	result, err := runner.run(ctx, agyPath, "--version")
+	result, err := runAgyTarget(ctx, runner, target, agyPath, "--version")
 	if err != nil {
 		return Diagnosis{
 			Status:  StatusTemporaryError,
@@ -245,6 +286,25 @@ func diagnoseAntigravity(ctx context.Context, runner commandRunner, agyPath stri
 		}, false
 	}
 	if result.ExitCode != 0 {
+		out := result.Stdout + " " + result.Stderr
+		if target.Mode == "wsl" && (strings.Contains(strings.ToLower(out), "not found") || strings.Contains(strings.ToLower(out), "no such file")) {
+			distroInfo := ""
+			if target.WslDistro != "" {
+				distroInfo = " in WSL distro " + target.WslDistro
+			}
+			return Diagnosis{
+				Status:  StatusNotInstalled,
+				Message: fmt.Sprintf(`Install the Antigravity CLI (<code>agy</code>)%s and log in to monitor your quota. <a href="%s">Installation guide</a>`, distroInfo, antigravityInstallGuideURL),
+				Details: technicalDetails(out),
+			}, false
+		}
+		if containsAnyMarker(out, unsupportedCLIMarkers) {
+			return Diagnosis{
+				Status:  StatusUnsupportedCLI,
+				Message: unsupportedCLIMessage("Antigravity CLI", antigravityInstallGuideURL),
+				Details: technicalDetails(out),
+			}, false
+		}
 		return Diagnosis{
 			Status:  StatusUnsupportedCLI,
 			Message: unsupportedCLIMessage("Antigravity CLI", antigravityInstallGuideURL),
@@ -253,50 +313,42 @@ func diagnoseAntigravity(ctx context.Context, runner commandRunner, agyPath stri
 	}
 
 	if !active {
+		targetDesc := agyPath
+		if target.Mode == "wsl" {
+			targetDesc = "WSL"
+			if target.WslDistro != "" {
+				targetDesc += fmt.Sprintf(" (%s)", target.WslDistro)
+			}
+		}
 		return Diagnosis{
 			Status:  StatusAuthCheckRequired,
 			Message: "Antigravity CLI found. Connect to verify usage.",
-			Details: technicalDetails(fmt.Sprintf("Found agy (%s) at %s", strings.TrimSpace(result.Stdout), agyPath)),
+			Details: technicalDetails(fmt.Sprintf("Found agy (%s) via %s", strings.TrimSpace(result.Stdout), targetDesc)),
 		}, false
 	}
 	return Diagnosis{}, true
 }
 
-// getAntigravityUsage backs both "Check connection" and the recurring poll.
-// It checks `--version` first (via diagnoseAntigravity) even when active, so
-// a broken or incompatible CLI is reported without ever attempting the
-// heavier `/usage` request - see diagnoseAntigravity's doc comment.
-func getAntigravityUsage(ctx context.Context, deps providerDeps, _ string, active bool) AntigravityUsage {
+func getAntigravityUsage(ctx context.Context, deps providerDeps, _ string, target AgyTarget, active bool) AntigravityUsage {
 	usage := AntigravityUsage{FetchedAt: time.Now().Format(time.RFC3339)}
 
-	agyPath, notInstalled, found := findAgy(deps)
+	agyPath, notInstalled, found := findAgyTarget(target, deps)
 	if !found {
 		usage.applyDiagnosis(notInstalled)
 		return usage
 	}
 
 	if !active {
-		diagnosis, ok := diagnoseAntigravity(ctx, deps.runner, agyPath, false)
+		diagnosis, ok := diagnoseAntigravity(ctx, deps.runner, target, agyPath, false)
 		if !ok {
 			usage.applyDiagnosis(diagnosis)
 			return usage
 		}
 	}
 
-	// `models` is the authoritative, lightweight authentication check. Run it
-	// before `/usage` so a signed-out session is reported without launching the
-	// heavier interactive prompt command.
-	modelsCtx, cancel := context.WithTimeout(ctx, antigravityModelsTimeout)
-	defer cancel()
-	models := checkAntigravityModels(modelsCtx, deps.runner, agyPath, "agy authentication confirmed.")
-	if models.Status != StatusConnected {
-		usage.applyDiagnosis(models)
-		return usage
-	}
-
 	usageCtx, cancel := context.WithTimeout(ctx, antigravityUsageTimeout)
 	defer cancel()
-	result, runErr := deps.runner.run(usageCtx, agyPath,
+	result, runErr := runAgyTarget(usageCtx, deps.runner, target, agyPath,
 		"-p", "/usage", "--output-format", "json", "--print-timeout", "30s")
 	if runErr != nil {
 		usage.applyDiagnosis(Diagnosis{
@@ -307,25 +359,22 @@ func getAntigravityUsage(ctx context.Context, deps providerDeps, _ string, activ
 		return usage
 	}
 
-	parsed, diagnosis := classifyAntigravityUsage(ctx, deps, agyPath, result)
+	parsed, diagnosis := classifyAntigravityUsage(result)
 	if diagnosis.Status == StatusConnected {
 		usage.Groups = parsed.Groups
 		usage.Description = parsed.Description
+		usage.User = resolveAntigravityUser(target)
 	}
 	usage.applyDiagnosis(diagnosis)
 	return usage
 }
 
-// classifyAntigravityUsage turns one `/usage` run into a state. `/usage` is the
-// single path that proves sign-in and usage access at once, so a clean run with
-// at least one group is the only thing that yields StatusConnected.
-func classifyAntigravityUsage(ctx context.Context, deps providerDeps, agyPath string, result commandResult) (AntigravityUsage, Diagnosis) {
+func classifyAntigravityUsage(result commandResult) (AntigravityUsage, Diagnosis) {
 	if result.ExitCode == 0 {
 		parsed, err := ParseAntigravityUsage([]byte(result.Stdout))
 		if err == nil && len(parsed.Groups) > 0 {
 			return parsed, Diagnosis{Status: StatusConnected}
 		}
-		// Exit 0 means agy authenticated and answered; we just cannot show it.
 		reason := ReasonNoUsageData
 		if err != nil {
 			reason = ReasonUnsupportedResponse
@@ -333,8 +382,8 @@ func classifyAntigravityUsage(ctx context.Context, deps providerDeps, agyPath st
 		return AntigravityUsage{}, usageUnreadableDiagnosis("Antigravity", reason, err)
 	}
 
-	output := result.Stdout + " " + result.Stderr
-	if containsAnyMarker(output, antigravityAuthMarkers) {
+	output := strings.TrimSpace(result.Stdout + " " + result.Stderr)
+	if containsAntigravityAuthMarker(output) || strings.Contains(strings.ToLower(output), "sign in") {
 		return AntigravityUsage{}, Diagnosis{
 			Status:  StatusLoginRequired,
 			Message: "Log in to the Antigravity CLI to view quota information.",
@@ -348,52 +397,9 @@ func classifyAntigravityUsage(ctx context.Context, deps providerDeps, agyPath st
 			Details: technicalDetails(output),
 		}
 	}
-	return AntigravityUsage{}, classifyAntigravityWithModels(ctx, deps, agyPath, output)
-}
-
-// classifyAntigravityWithModels is the optional secondary diagnostic. It runs
-// only for a `/usage` failure we could not read, and only to answer one
-// question: was that an authentication problem, or a usage response this
-// version cannot handle? A working `agy models` proves the session is fine and
-// narrows the failure to the response itself.
-func classifyAntigravityWithModels(ctx context.Context, deps providerDeps, agyPath, usageOutput string) Diagnosis {
-	modelsCtx, cancel := context.WithTimeout(ctx, antigravityModelsTimeout)
-	defer cancel()
-	result, err := deps.runner.run(modelsCtx, agyPath, "models")
-	if err != nil {
-		return Diagnosis{
-			Status:  StatusTemporaryError,
-			Message: "Could not reach Antigravity right now. Retry in a moment.",
-			Details: technicalDetails(usageOutput),
-		}
-	}
-
-	// The output is not structured JSON, so nothing here depends on model names:
-	// a zero exit plus at least one non-empty stdout line is the whole test.
-	// Progress chatter like "Fetching available models..." goes to stderr and is
-	// kept apart from this check.
-	if result.ExitCode == 0 && hasListRow(result.Stdout) {
-		return usageUnreadableDiagnosis("Antigravity", ReasonUnsupportedResponse, errors.New(usageOutput))
-	}
-	if containsAnyMarker(result.Stdout+" "+result.Stderr, antigravityAuthMarkers) {
-		return Diagnosis{
-			Status:  StatusLoginRequired,
-			Message: "Log in to the Antigravity CLI to view quota information.",
-			Details: technicalDetails(usageOutput),
-		}
-	}
-	return Diagnosis{
+	return AntigravityUsage{}, Diagnosis{
 		Status:  StatusTemporaryError,
 		Message: "Could not reach Antigravity right now. Retry in a moment.",
-		Details: technicalDetails(usageOutput),
+		Details: technicalDetails(output),
 	}
-}
-
-func hasListRow(stdout string) bool {
-	for _, line := range strings.Split(stdout, "\n") {
-		if strings.TrimSpace(line) != "" {
-			return true
-		}
-	}
-	return false
 }

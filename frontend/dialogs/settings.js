@@ -52,8 +52,8 @@ async function refreshProviderUsers() {
   }
 
   const candidates = config.providers.filter(instance =>
-    !instance.pending && ['codex', 'claude'].includes(instance.type) &&
-    config.providers.filter(other => other.type === instance.type).length > 1);
+    !instance.pending && ['codex', 'claude', 'antigravity'].includes(instance.type) &&
+    (instance.type === 'antigravity' || config.providers.filter(other => other.type === instance.type).length > 1));
   const results = await Promise.allSettled(candidates.map(async instance => ({
     id: instance.id,
     usage: await rpc(PROVIDER_TYPE_RPC[instance.type].usageRpcMethod, instance.id),
@@ -160,6 +160,9 @@ const providerAddDialogDeviceCopy = document.getElementById('provider-add-dialog
 const providerAddDialogDeviceOpen = document.getElementById('provider-add-dialog-device-open');
 const providerAddDialogSubmit = document.getElementById('provider-add-dialog-submit');
 const providerAddDialogClose = document.getElementById('provider-add-dialog-close');
+const providerAddDialogAgyTarget = document.getElementById('provider-add-dialog-agy-target');
+const providerAddAgyMode = document.getElementById('provider-add-agy-mode');
+const providerAddAgyDistro = document.getElementById('provider-add-agy-distro');
 
 const providerAddDialogActionClose = document.getElementById('provider-add-dialog-action-close');
 const confirmDialog = document.getElementById('confirm-dialog');
@@ -209,12 +212,19 @@ providerAddDialogClose.addEventListener('click', async () => {
   providerAddDialogSubmit.textContent = 'Submit code';
   providerAddDialogSubmit.disabled = false;
   providerAddDialogActionClose.hidden = true;
+  if (providerAddDialogAgyTarget) providerAddDialogAgyTarget.hidden = true;
   if (providerFlowGeneration === closingGeneration) await reloadConfig();
 });
 providerAddDialogActionClose.addEventListener('click', () => {
   providerAddDialog.hidden = true;
   providerAddDialogActionClose.hidden = true;
+  if (providerAddDialogAgyTarget) providerAddDialogAgyTarget.hidden = true;
 });
+if (providerAddAgyMode && providerAddAgyDistro) {
+  providerAddAgyMode.addEventListener('change', () => {
+    providerAddAgyDistro.style.display = providerAddAgyMode.value === 'wsl' ? 'inline-block' : 'none';
+  });
+}
 providerAddDialogDeviceCopy.addEventListener('click', async () => {
   const code = providerAddDialogDeviceCode.textContent;
   if (!code) return;
@@ -323,6 +333,16 @@ providerAddDialogImport.addEventListener('click', async () => {
 providerAddDialogLogin.addEventListener('click', async () => {
   if (!pendingLogin) return;
   const { provider, instance, generation } = pendingLogin;
+  if (provider === 'antigravity') {
+    const mode = providerAddAgyMode?.value || 'native';
+    const distro = mode === 'wsl' ? (providerAddAgyDistro?.value || '') : '';
+    instance.agyMode = mode;
+    instance.wslDistro = distro;
+    try {
+      await saveSetting('SetAntigravityConfig', instance.id, mode, distro);
+    } catch { /* continue */ }
+    if (providerAddDialogAgyTarget) providerAddDialogAgyTarget.hidden = true;
+  }
   providerAddDialogLogin.hidden = true;
   providerAddDialogImport.hidden = true;
   providerAddDialogLogin.disabled = true;
@@ -757,6 +777,30 @@ function renderProviderList() {
 
     row.append(nameLabel, rightWrap);
     providerListEl.append(row);
+
+    if (instance.type === 'antigravity') {
+      const subRow = document.createElement('div');
+      subRow.className = 'provider-subrow';
+      subRow.style.display = 'flex';
+      subRow.style.alignItems = 'center';
+      subRow.style.gap = '6px';
+      subRow.style.padding = '2px 0 6px 12px';
+      subRow.style.fontSize = '0.75rem';
+      subRow.style.color = 'var(--muted)';
+
+      const envLabel = document.createElement('span');
+      envLabel.textContent = 'CLI in:';
+
+      const targetBadge = document.createElement('span');
+      targetBadge.className = 'provider-target-badge';
+      const targetText = instance.agyMode === 'wsl'
+        ? (instance.wslDistro ? `WSL (${instance.wslDistro})` : 'WSL')
+        : 'Windows';
+      targetBadge.textContent = targetText;
+
+      subRow.append(envLabel, targetBadge);
+      providerListEl.append(subRow);
+    }
   });
 
   providerAddButtonsEl.replaceChildren();
@@ -782,19 +826,6 @@ function renderProviderList() {
     button.disabled = addingProviders.size > 0;
     button.addEventListener('click', async () => {
       if (addingProviders.size > 0) return;
-      if (provider === 'antigravity' && config.providers.some(instance => instance.type === provider)) {
-        providerAddDialog.hidden = false;
-        providerAddDialogTitle.textContent = `Add ${providerTypeLabel(provider)}`;
-        providerAddDialogStatus.classList.remove('is-loading');
-        providerAddDialogStatus.textContent = "Multiple Antigravity entries aren't supported. AI Gauge uses the session from the installed agy CLI, so additional entries would use the same session.";
-        providerAddDialogLogin.hidden = true;
-        providerAddDialogImport.hidden = true;
-        providerAddDialogCode.hidden = true;
-        providerAddDialogSubmit.hidden = true;
-        providerAddDialogActionClose.hidden = false;
-        providerAddDialogClose.disabled = false;
-        return;
-      }
       addingProviders.add(provider);
       const generation = ++providerFlowGeneration;
         providerAddDialog.hidden = false;
@@ -804,6 +835,7 @@ function renderProviderList() {
         providerAddDialogLogin.hidden = true;
         providerAddDialogImport.hidden = true;
         providerAddDialogActionClose.hidden = true;
+        if (providerAddDialogAgyTarget) providerAddDialogAgyTarget.hidden = true;
         renderProviderList();
         try {
           const instance = await rpc('AddProviderInstance', provider);
@@ -820,6 +852,27 @@ function renderProviderList() {
           providerAddDialogLogin.textContent = provider === 'antigravity' ? 'Start monitoring with agy CLI' : 'Sign in with browser';
           if (provider === 'antigravity') {
             providerAddDialogStatus.textContent = 'AI Gauge will track your quota usage through the installed agy CLI.';
+            if (providerAddDialogAgyTarget) {
+              providerAddDialogAgyTarget.hidden = false;
+              if (providerAddAgyMode) providerAddAgyMode.value = 'native';
+              if (providerAddAgyDistro) {
+                providerAddAgyDistro.style.display = 'none';
+                providerAddAgyDistro.replaceChildren();
+                rpc('GetWSLDistros').then(distros => {
+                  if (Array.isArray(distros) && distros.length > 0) {
+                    providerAddAgyDistro.replaceChildren();
+                    for (const d of distros) {
+                      const name = typeof d === 'string' ? d : d.name;
+                      const isDef = typeof d === 'object' && d.isDefault;
+                      const label = isDef ? `${name} (*)` : name;
+                      providerAddAgyDistro.add(new Option(label, name));
+                    }
+                  }
+                }).catch(() => {});
+              }
+            }
+          } else {
+            if (providerAddDialogAgyTarget) providerAddDialogAgyTarget.hidden = true;
           }
           providerAddDialogLogin.hidden = false;
           if (provider !== 'antigravity') {

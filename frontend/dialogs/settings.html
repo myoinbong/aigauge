@@ -99,6 +99,14 @@
         <button id="provider-add-dialog-close" class="provider-add-dialog-close" type="button" aria-label="Close"><span class="icon icon-close" aria-hidden="true"></span></button>
         <h2 id="provider-add-dialog-title">Add provider</h2>
         <p id="provider-add-dialog-status"></p>
+        <div id="provider-add-dialog-agy-target" class="provider-add-target-row" hidden>
+          <label for="provider-add-agy-mode">CLI in:</label>
+          <select id="provider-add-agy-mode" class="provider-refresh-select">
+            <option value="native">Windows</option>
+            <option value="wsl">WSL</option>
+          </select>
+          <select id="provider-add-agy-distro" class="provider-refresh-select" style="display: none;"></select>
+        </div>
         <button id="provider-add-dialog-import" class="provider-add-dialog-choice" type="button" hidden>Try existing credentials</button>
         <button id="provider-add-dialog-login" class="provider-add-dialog-choice" type="button" hidden>Sign in with browser</button>
         <div id="provider-add-dialog-device-box" class="device-code-box" hidden>

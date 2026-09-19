@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 )
 
@@ -41,15 +42,37 @@ type pathLookup func(name string) (string, error)
 type execRunner struct{}
 
 func (execRunner) run(ctx context.Context, name string, args ...string) (commandResult, error) {
+	tracker := GetGlobalFlashTracker()
+	cmdID := tracker.BeginCommand(name, args...)
+	defer tracker.EndCommand(cmdID)
+
 	command := exec.CommandContext(ctx, name, args...)
 	configureHiddenCommand(command)
+
+	// Attach an empty stdin pipe so Windows ConPTY (openconsole.exe) does not
+	// allocate an interactive pseudo-console window for CLI calls.
+	command.Stdin = bytes.NewReader(nil)
+
+	// Hint to CLI tools and runtime wrappers that this is an automated, non-interactive environment.
+	command.Env = append(os.Environ(),
+		"TERM=dumb",
+		"CI=true",
+		"NO_COLOR=1",
+	)
 
 	stdout := &limitedBuffer{limit: maxCommandOutput}
 	stderr := &limitedBuffer{limit: maxCommandOutput}
 	command.Stdout = stdout
 	command.Stderr = stderr
 
-	err := command.Run()
+	if err := command.Start(); err != nil {
+		return commandResult{}, err
+	}
+	if command.Process != nil {
+		tracker.SetCommandPID(cmdID, command.Process.Pid)
+	}
+
+	err := command.Wait()
 	result := commandResult{Stdout: stdout.String(), Stderr: stderr.String()}
 
 	// Check the context before looking at err. When a CommandContext deadline

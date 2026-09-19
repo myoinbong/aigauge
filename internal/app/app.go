@@ -271,12 +271,13 @@ func (a *App) ConnectProvider(instanceID string) (providers.Diagnosis, error) {
 	// CLI instead, which manages its own sign-in. "Connect" therefore means
 	// "run the real check now" rather than a browser login.
 	if instance.Type == "antigravity" {
-		ready := providers.EnsureAntigravityCLI()
+		target := a.antigravityTargetForInstance(instanceID)
+		ready := providers.EnsureAntigravityCLIWithTarget(target)
 		if ready.Status != providers.StatusConnected {
 			return ready, nil
 		}
 		diag := diagnoseConnectedInstance(instance)
-		log.Printf("[aigauge] ConnectProvider(%q): checked agy CLI, status=%s", instanceID, diag.Status)
+		log.Printf("[aigauge] ConnectProvider(%q): checked agy CLI (%s), status=%s", instanceID, target.Mode, diag.Status)
 		return diag, nil
 	}
 
@@ -469,8 +470,27 @@ func (a *App) DiagnoseClaude(instanceID string) providers.Diagnosis {
 	return providers.DiagnoseClaude(instanceID)
 }
 
+func (a *App) antigravityTargetForInstance(instanceID string) providers.AgyTarget {
+	settings, err := a.loadSettings()
+	if err != nil {
+		return providers.AgyTarget{Mode: "native"}
+	}
+	for _, p := range settings.Providers {
+		if p.ID == instanceID || instanceID == "" {
+			if p.Type == "antigravity" {
+				return providers.AgyTarget{
+					Mode:      p.AgyMode,
+					WslDistro: p.WslDistro,
+				}
+			}
+		}
+	}
+	return providers.AgyTarget{Mode: "native"}
+}
+
 func (a *App) DiagnoseAntigravity(instanceID string) providers.Diagnosis {
-	return providers.DiagnoseAntigravity(instanceID)
+	target := a.antigravityTargetForInstance(instanceID)
+	return providers.DiagnoseAntigravityWithTarget(instanceID, target)
 }
 
 func (a *App) DiagnoseCopilot(instanceID string) providers.Diagnosis {
@@ -485,7 +505,8 @@ func (a *App) GetCodexUsage(instanceID string) providers.DisplayUsage {
 }
 
 func (a *App) GetAntigravityUsage(instanceID string) providers.DisplayUsage {
-	return providers.GetAntigravityUsage(instanceID).ToDisplay()
+	target := a.antigravityTargetForInstance(instanceID)
+	return providers.GetAntigravityUsageWithTarget(instanceID, target).ToDisplay()
 }
 
 func (a *App) GetClaudeUsage(instanceID string) providers.DisplayUsage {
@@ -592,6 +613,33 @@ func (a *App) SetProviderRefreshInterval(instanceID string, interval int) error 
 	})
 }
 
+// SetAntigravityConfig updates the CLI execution mode and optional WSL distro for an Antigravity instance.
+func (a *App) SetAntigravityConfig(instanceID string, agyMode string, wslDistro string) error {
+	if agyMode != "" && agyMode != "native" && agyMode != "wsl" {
+		return fmt.Errorf("invalid agy mode %q", agyMode)
+	}
+	return a.updateSettings(func(settings *config.Settings) error {
+		for i := range settings.Providers {
+			if settings.Providers[i].ID == instanceID {
+				settings.Providers[i].AgyMode = agyMode
+				settings.Providers[i].WslDistro = strings.TrimSpace(wslDistro)
+				if agyMode == "wsl" && (settings.Providers[i].Label == "Antigravity" || settings.Providers[i].Label == "") {
+					settings.Providers[i].Label = "Antigravity (WSL)"
+				} else if (agyMode == "" || agyMode == "native") && settings.Providers[i].Label == "Antigravity (WSL)" {
+					settings.Providers[i].Label = "Antigravity"
+				}
+				return nil
+			}
+		}
+		return fmt.Errorf("unknown provider instance %q", instanceID)
+	})
+}
+
+// GetWSLDistros enumerates the installed WSL distributions.
+func (a *App) GetWSLDistros() []providers.WSLDistroInfo {
+	return providers.GetWSLDistros()
+}
+
 func (a *App) SetProviderOrder(instanceIDs []string) error {
 	return a.updateSettings(func(settings *config.Settings) error {
 		if len(instanceIDs) != len(settings.Providers) {
@@ -632,13 +680,6 @@ func (a *App) AddProviderInstance(providerType string) (config.ProviderInstance,
 	settings, err := a.loadSettingsLocked()
 	if err != nil {
 		return config.ProviderInstance{}, err
-	}
-	if providerType == "antigravity" {
-		for _, p := range settings.Providers {
-			if p.Type == providerType {
-				return config.ProviderInstance{}, fmt.Errorf("only one Antigravity instance is supported")
-			}
-		}
 	}
 
 	id, err := config.NewInstanceID()

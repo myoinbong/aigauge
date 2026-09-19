@@ -209,6 +209,8 @@ test('a provider instance needs a valid id and a recognized type', () => {
 test('a blank or missing label falls back to the provider type name', () => {
   assert.equal(normalizeProviderInstance({ id: 'a', type: 'codex', label: '' }).label, 'Codex');
   assert.equal(normalizeProviderInstance({ id: 'a', type: 'codex', label: '   ' }).label, 'Codex');
+  assert.equal(normalizeProviderInstance({ id: 'a', type: 'antigravity', agyMode: 'wsl' }).label, 'Antigravity (WSL)');
+  assert.equal(normalizeProviderInstance({ id: 'a', type: 'antigravity', agyMode: 'wsl', wslDistro: 'Ubuntu' }).label, 'Antigravity (Ubuntu)');
 });
 
 test('providerTypeLabel names every known type and echoes back an unknown one', () => {
@@ -220,7 +222,7 @@ test('providerTypeLabel names every known type and echoes back an unknown one', 
   assert.equal(providerTypeLabel('gemini'), 'gemini');
 });
 
-test('account identifiers appear only when the same supported provider is registered more than once', () => {
+test('account identifiers appear only when the same supported provider is registered more than once, or always for antigravity', () => {
   const providers = [
     { id: 'c1', type: 'codex' },
     { id: 'c2', type: 'codex' },
@@ -229,7 +231,8 @@ test('account identifiers appear only when the same supported provider is regist
   assert.equal(shouldShowProviderUser(providers, 'codex', 'alex'), true);
   assert.equal(shouldShowProviderUser(providers, 'claude', 'ea24'), false);
   assert.equal(shouldShowProviderUser(providers, 'codex', ''), false);
-  assert.equal(shouldShowProviderUser([...providers, { id: 'a2', type: 'antigravity' }], 'antigravity', 'abcd'), false);
+  assert.equal(shouldShowProviderUser(providers, 'antigravity', 'user@gmail.com'), true);
+  assert.equal(shouldShowProviderUser(providers, 'antigravity', ''), false);
 });
 
 test('a provider list keeps order, drops bad entries, and de-duplicates by id', () => {

@@ -958,6 +958,29 @@ button {
   font-size: .72rem;
 }
 
+.provider-add-target-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  font-size: .75rem;
+  color: var(--muted);
+}
+
+.provider-add-target-row[hidden] {
+  display: none;
+}
+
+.provider-add-target-row select {
+  font-size: .75rem;
+}
+
+.provider-target-badge {
+  font-size: .75rem;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
 .provider-add-dialog-choice {
   width: 100%;
   margin: 0 0 8px;

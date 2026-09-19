@@ -146,7 +146,11 @@ func DiagnoseCodex(tokenKey string) Diagnosis {
 }
 
 func DiagnoseAntigravity(tokenKey string) Diagnosis {
-	return diagnoseAntigravityLocal(context.Background(), defaultDeps(), tokenKey)
+	return DiagnoseAntigravityWithTarget(tokenKey, AgyTarget{Mode: "native"})
+}
+
+func DiagnoseAntigravityWithTarget(tokenKey string, target AgyTarget) Diagnosis {
+	return diagnoseAntigravityLocalWithTarget(context.Background(), defaultDeps(), tokenKey, target)
 }
 
 func DiagnoseCopilot(tokenKey string) Diagnosis {

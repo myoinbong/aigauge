@@ -34,6 +34,7 @@ type agyUsageResponse struct {
 type AntigravityUsage struct {
 	Groups      []AntigravityUsageGroup `json:"groups"`
 	Description string                  `json:"description"`
+	User        string                  `json:"user,omitempty"`
 	FetchedAt   string                  `json:"fetchedAt"`
 
 	// Raw is the complete, untrimmed agy stdout ParseAntigravityUsage was
@@ -56,4 +57,10 @@ type AntigravityUsageBucket struct {
 	Description       string  `json:"description"`
 	RemainingFraction float64 `json:"remainingFraction"`
 	ResetTime         string  `json:"resetTime"`
+}
+
+// AgyTarget specifies where and how the agy CLI should be invoked.
+type AgyTarget struct {
+	Mode      string `json:"mode,omitempty"`      // "native" or "wsl"
+	WslDistro string `json:"wslDistro,omitempty"` // optional WSL distro name
 }

@@ -210,7 +210,7 @@ func TestDiagnoseCodexWithoutToken(t *testing.T) {
 
 func TestDiagnoseAntigravityStopsBeforeAnyNetworkCommandWhenInactive(t *testing.T) {
 	runner := &fakeRunner{result: commandResult{Stdout: "1.1.28"}}
-	diagnosis, ok := diagnoseAntigravity(context.Background(), runner, "agy", false)
+	diagnosis, ok := diagnoseAntigravity(context.Background(), runner, AgyTarget{Mode: "native"}, "agy", false)
 	if ok {
 		t.Error("diagnoseAntigravity() ok = true, want false so /usage is never run for an inactive provider")
 	}
@@ -224,7 +224,7 @@ func TestDiagnoseAntigravityStopsBeforeAnyNetworkCommandWhenInactive(t *testing.
 
 func TestDiagnoseAntigravityReportsUnsupportedCLI(t *testing.T) {
 	runner := &fakeRunner{result: commandResult{Stderr: "unknown flag: --version", ExitCode: 2}}
-	diagnosis, ok := diagnoseAntigravity(context.Background(), runner, "agy", true)
+	diagnosis, ok := diagnoseAntigravity(context.Background(), runner, AgyTarget{Mode: "native"}, "agy", true)
 	if ok {
 		t.Error("diagnoseAntigravity() ok = true, want false for an unsupported CLI")
 	}
@@ -238,7 +238,7 @@ func TestDiagnoseAntigravityReportsUnsupportedCLI(t *testing.T) {
 
 func TestDiagnoseAntigravityProceedsWhenActive(t *testing.T) {
 	runner := &fakeRunner{result: commandResult{Stdout: "1.1.28"}}
-	if _, ok := diagnoseAntigravity(context.Background(), runner, "agy", true); !ok {
+	if _, ok := diagnoseAntigravity(context.Background(), runner, AgyTarget{Mode: "native"}, "agy", true); !ok {
 		t.Error("diagnoseAntigravity() ok = false, want true so the caller runs /usage")
 	}
 }
@@ -271,7 +271,7 @@ func TestDiagnoseAntigravityLocalNeverRunsANetworkCommand(t *testing.T) {
 
 func TestGetAntigravityUsageReportsNotInstalledWithoutRawPathError(t *testing.T) {
 	runner := antigravityRunner(map[string]commandResult{})
-	usage := getAntigravityUsage(context.Background(), cliDeps(runner, missingPath()), "antigravity", true)
+	usage := getAntigravityUsage(context.Background(), cliDeps(runner, missingPath()), "antigravity", AgyTarget{Mode: "native"}, true)
 
 	if usage.Status != StatusNotInstalled {
 		t.Errorf("Status = %q, want %q", usage.Status, StatusNotInstalled)
@@ -283,7 +283,7 @@ func TestGetAntigravityUsageReportsNotInstalledWithoutRawPathError(t *testing.T)
 
 func TestGetAntigravityUsageStopsBeforeUsageWhenInactive(t *testing.T) {
 	runner := antigravityRunner(map[string]commandResult{})
-	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", false)
+	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", AgyTarget{Mode: "native"}, false)
 
 	if usage.Status != StatusAuthCheckRequired {
 		t.Errorf("Status = %q, want %q", usage.Status, StatusAuthCheckRequired)
@@ -297,7 +297,7 @@ func TestGetAntigravityUsageConnectsOnValidUsage(t *testing.T) {
 	runner := antigravityRunner(map[string]commandResult{
 		"-p": {Stdout: string(readFixture(t, "antigravity-usage.json"))},
 	})
-	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", true)
+	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", AgyTarget{Mode: "native"}, true)
 
 	if usage.Status != StatusConnected {
 		t.Fatalf("Status = %q (%q), want %q", usage.Status, usage.Message, StatusConnected)
@@ -309,14 +309,14 @@ func TestGetAntigravityUsageConnectsOnValidUsage(t *testing.T) {
 
 func TestGetAntigravityUsageSeparatesNoDataFromUnreadableResponse(t *testing.T) {
 	empty := antigravityRunner(map[string]commandResult{"-p": {Stdout: `{"command":{"data":{"groups":[]}}}`}})
-	usage := getAntigravityUsage(context.Background(), cliDeps(empty, foundPath("agy")), "antigravity", true)
+	usage := getAntigravityUsage(context.Background(), cliDeps(empty, foundPath("agy")), "antigravity", AgyTarget{Mode: "native"}, true)
 	if usage.Status != StatusUsageUnavailable || usage.Reason != ReasonNoUsageData {
 		t.Errorf("empty groups: (Status, Reason) = (%q, %q), want (%q, %q)",
 			usage.Status, usage.Reason, StatusUsageUnavailable, ReasonNoUsageData)
 	}
 
 	garbled := antigravityRunner(map[string]commandResult{"-p": {Stdout: "not json at all"}})
-	usage = getAntigravityUsage(context.Background(), cliDeps(garbled, foundPath("agy")), "antigravity", true)
+	usage = getAntigravityUsage(context.Background(), cliDeps(garbled, foundPath("agy")), "antigravity", AgyTarget{Mode: "native"}, true)
 	if usage.Status != StatusUsageUnavailable || usage.Reason != ReasonUnsupportedResponse {
 		t.Errorf("garbled output: (Status, Reason) = (%q, %q), want (%q, %q)",
 			usage.Status, usage.Reason, StatusUsageUnavailable, ReasonUnsupportedResponse)
@@ -327,13 +327,10 @@ func TestGetAntigravityUsageReportsLoginRequiredOnAuthMarker(t *testing.T) {
 	runner := antigravityRunner(map[string]commandResult{
 		"-p": {Stderr: "Error: not logged in. Run agy to sign in.", ExitCode: 1},
 	})
-	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", true)
+	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", AgyTarget{Mode: "native"}, true)
 
 	if usage.Status != StatusLoginRequired {
 		t.Errorf("Status = %q, want %q", usage.Status, StatusLoginRequired)
-	}
-	if !runner.ran("models") {
-		t.Errorf("calls = %v, want models authentication check before usage", runner.calls)
 	}
 }
 
@@ -341,34 +338,18 @@ func TestGetAntigravityUsageReportsUnsupportedCLIOnRejectedCommand(t *testing.T)
 	runner := antigravityRunner(map[string]commandResult{
 		"-p": {Stderr: `Error: unexpected argument "--output-format".`, ExitCode: 2},
 	})
-	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", true)
+	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", AgyTarget{Mode: "native"}, true)
 
 	if usage.Status != StatusUnsupportedCLI {
 		t.Errorf("Status = %q, want %q", usage.Status, StatusUnsupportedCLI)
 	}
 }
 
-func TestGetAntigravityUsageUsesModelsToDisambiguateAnUnreadableFailure(t *testing.T) {
-	runner := antigravityRunner(map[string]commandResult{
-		"-p":     {Stderr: "Error: something unexpected happened", ExitCode: 1},
-		"models": {Stdout: "gemini-3-pro\ngpt-5.2\n", Stderr: "Fetching available models..."},
-	})
-	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", true)
-
-	if !runner.ran("models") {
-		t.Fatalf("ran %v, want the secondary diagnostic for an ambiguous failure", runner.calls)
-	}
-	if usage.Status != StatusUsageUnavailable || usage.Reason != ReasonUnsupportedResponse {
-		t.Errorf("(Status, Reason) = (%q, %q), want (%q, %q)", usage.Status, usage.Reason, StatusUsageUnavailable, ReasonUnsupportedResponse)
-	}
-}
-
 func TestGetAntigravityUsageNeverGuessesSignOutFromAnUnknownFailure(t *testing.T) {
 	runner := antigravityRunner(map[string]commandResult{
-		"-p":     {Stderr: "Error: something unexpected happened", ExitCode: 1},
-		"models": {Stderr: "Error: something unexpected happened", ExitCode: 1},
+		"-p": {Stderr: "Error: something unexpected happened", ExitCode: 1},
 	})
-	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", true)
+	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", AgyTarget{Mode: "native"}, true)
 
 	if usage.Status != StatusTemporaryError {
 		t.Errorf("Status = %q, want %q - neither command said anything about authentication", usage.Status, StatusTemporaryError)
@@ -378,7 +359,7 @@ func TestGetAntigravityUsageNeverGuessesSignOutFromAnUnknownFailure(t *testing.T
 func TestGetAntigravityUsageReportsTemporaryErrorOnUsageTimeout(t *testing.T) {
 	runner := antigravityRunner(map[string]commandResult{})
 	runner.errs["-p"] = context.DeadlineExceeded
-	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", true)
+	usage := getAntigravityUsage(context.Background(), cliDeps(runner, foundPath("agy")), "antigravity", AgyTarget{Mode: "native"}, true)
 
 	if usage.Status != StatusTemporaryError {
 		t.Errorf("Status = %q, want %q", usage.Status, StatusTemporaryError)
