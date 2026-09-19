@@ -41,6 +41,28 @@ func ParseCopilotUsage(data []byte) (CopilotUsage, error) {
 	return usage, nil
 }
 
+// defaultActionsMinutesForPlan returns the included GitHub Actions minutes for a given account plan.
+func defaultActionsMinutesForPlan(plan string) float64 {
+	switch strings.ToLower(strings.TrimSpace(plan)) {
+	case "pro", "team":
+		return 3000
+	case "enterprise":
+		return 50000
+	default:
+		return 2000
+	}
+}
+
+// defaultCodespacesHoursForPlan returns the included Codespaces core hours for a given account plan.
+func defaultCodespacesHoursForPlan(plan string) float64 {
+	switch strings.ToLower(strings.TrimSpace(plan)) {
+	case "pro", "team", "enterprise":
+		return 180
+	default:
+		return 120
+	}
+}
+
 // ToDisplay converts Copilot's quota snapshots and GitHub billing metrics into display buckets.
 func (u CopilotUsage) ToDisplay() DisplayUsage {
 	display := DisplayUsage{
@@ -54,8 +76,11 @@ func (u CopilotUsage) ToDisplay() DisplayUsage {
 	}
 
 	display.Plan = u.CopilotPlan
+	if display.Plan == "" && u.AccountPlan != "" {
+		display.Plan = u.AccountPlan
+	}
 
-	if u.CopilotPlan == "" && len(u.QuotaSnapshots) == 0 && !u.HasActionsBilling {
+	if u.CopilotPlan == "" && u.AccountPlan == "" && len(u.QuotaSnapshots) == 0 && !u.HasActionsBilling {
 		display.applyDiagnosis(usageUnreadableDiagnosis("GitHub", ReasonNoUsageData, fmt.Errorf("no quota snapshots available in response")))
 		return display
 	}
@@ -83,7 +108,7 @@ func (u CopilotUsage) ToDisplay() DisplayUsage {
 		// Group 2: GitHub Actions
 		incActions := u.ActionsIncludedMinutes
 		if incActions <= 0 {
-			incActions = 2000 // 기본 무료 한도 (2,000분)
+			incActions = defaultActionsMinutesForPlan(u.AccountPlan)
 		}
 		usedActions := u.ActionsMinutesUsed
 		remActions := incActions - usedActions
@@ -113,7 +138,7 @@ func (u CopilotUsage) ToDisplay() DisplayUsage {
 		if u.HasCodespacesBilling {
 			incCodespaces := u.CodespacesIncludedHours
 			if incCodespaces <= 0 {
-				incCodespaces = 120 // GitHub Free 기본 120 코어 시간
+				incCodespaces = defaultCodespacesHoursForPlan(u.AccountPlan)
 			}
 			usedCodespaces := u.CodespacesHoursUsed
 			remCodespaces := incCodespaces - usedCodespaces
@@ -207,16 +232,22 @@ func getCopilotWslUsage(ctx context.Context, deps providerDeps, target CopilotTa
 		}
 	}
 
-	// 2. If username not found from Copilot response, fetch /user
-	if username == "" {
-		userRes, userErr := runGhTarget(ctx, deps.runner, target, "api", "/user")
-		if userErr == nil && userRes.ExitCode == 0 {
-			var userObj struct {
-				Login string `json:"login"`
-			}
-			if jsonErr := json.Unmarshal([]byte(userRes.Stdout), &userObj); jsonErr == nil {
+	// 2. Fetch authenticated user profile to get account plan and username
+	var accountPlan string
+	userRes, userErr := runGhTarget(ctx, deps.runner, target, "api", "/user")
+	if userErr == nil && userRes.ExitCode == 0 && strings.TrimSpace(userRes.Stdout) != "" {
+		var userObj struct {
+			Login string `json:"login"`
+			Plan  struct {
+				Name string `json:"name"`
+			} `json:"plan"`
+		}
+		if jsonErr := json.Unmarshal([]byte(userRes.Stdout), &userObj); jsonErr == nil {
+			if username == "" && userObj.Login != "" {
 				username = userObj.Login
 			}
+			accountPlan = userObj.Plan.Name
+			usage.AccountPlan = accountPlan
 		}
 	}
 
@@ -229,15 +260,28 @@ func getCopilotWslUsage(ctx context.Context, deps providerDeps, target CopilotTa
 			if jsonErr := json.Unmarshal([]byte(billingRes.Stdout), &summary); jsonErr == nil {
 				billingSuccess = true
 				usage.HasActionsBilling = true
-				usage.ActionsIncludedMinutes = 2000 // default free tier allowance
+				usage.ActionsIncludedMinutes = defaultActionsMinutesForPlan(accountPlan)
 				usage.HasCodespacesBilling = true
-				usage.CodespacesIncludedHours = 120 // default free tier allowance (120 core hours)
+				usage.CodespacesIncludedHours = defaultCodespacesHoursForPlan(accountPlan)
 				for _, item := range summary.UsageItems {
 					if strings.EqualFold(item.Product, "Actions") {
 						usage.ActionsMinutesUsed += item.GrossQuantity
 					} else if strings.EqualFold(item.Product, "Codespaces") {
 						usage.CodespacesHoursUsed += item.GrossQuantity
 					}
+				}
+			}
+		}
+
+		// Also check /settings/billing/actions in case included_minutes is directly provided
+		actionsRes, actionsErr := runGhTarget(ctx, deps.runner, target, "api", "-H", "Accept: application/vnd.github+json", fmt.Sprintf("/users/%s/settings/billing/actions", username))
+		if actionsErr == nil && actionsRes.ExitCode == 0 && strings.TrimSpace(actionsRes.Stdout) != "" {
+			var actionsBilling GitHubActionsBilling
+			if jsonErr := json.Unmarshal([]byte(actionsRes.Stdout), &actionsBilling); jsonErr == nil {
+				if actionsBilling.IncludedMinutes > 0 {
+					usage.ActionsIncludedMinutes = actionsBilling.IncludedMinutes
+					usage.HasActionsBilling = true
+					billingSuccess = true
 				}
 			}
 		}

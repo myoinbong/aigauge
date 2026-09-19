@@ -19,6 +19,7 @@ type CopilotUsage struct {
 	User           string                          `json:"user,omitempty"`
 
 	// Additional billing metrics for WSL GH CLI mode
+	AccountPlan             string  `json:"account_plan,omitempty"`
 	ActionsMinutesUsed      float64 `json:"actions_minutes_used,omitempty"`
 	ActionsIncludedMinutes  float64 `json:"actions_included_minutes,omitempty"`
 	HasActionsBilling       bool    `json:"has_actions_billing,omitempty"`
@@ -30,6 +31,13 @@ type CopilotUsage struct {
 	Raw json.RawMessage `json:"-"`
 
 	DiagnosisFields
+}
+
+// GitHubActionsBilling mirrors /users/{username}/settings/billing/actions
+type GitHubActionsBilling struct {
+	TotalMinutesUsed     float64 `json:"total_minutes_used"`
+	TotalPaidMinutesUsed float64 `json:"total_paid_minutes_used"`
+	IncludedMinutes      float64 `json:"included_minutes"`
 }
 
 // GitHubBillingUsageItem mirrors an item from /users/{username}/settings/billing/usage/summary
