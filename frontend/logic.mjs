@@ -85,8 +85,8 @@ export function providerTypeLabel(type) {
 }
 
 export function shouldShowProviderUser(providers, type, user) {
-  if (!user || !['codex', 'claude', 'antigravity'].includes(type) || !Array.isArray(providers)) return false;
-  if (type === 'antigravity') return true;
+  if (!user || !['codex', 'claude', 'antigravity', 'copilot'].includes(type) || !Array.isArray(providers)) return false;
+  if (type === 'antigravity' || type === 'copilot') return true;
   return providers.filter(instance => instance?.type === type).length > 1;
 }
 
@@ -102,10 +102,14 @@ export function normalizeProviderInstance(raw) {
   if (raw.type === 'antigravity' && raw.agyMode === 'wsl' && label === 'Antigravity') {
     label = raw.wslDistro ? `Antigravity (${raw.wslDistro})` : 'Antigravity (WSL)';
   }
+  if (raw.type === 'copilot' && raw.copilotMode === 'wsl' && (label === 'GitHub Copilot' || label === 'GitHub' || !label)) {
+    label = raw.wslDistro ? `GitHub (${raw.wslDistro})` : 'GitHub';
+  }
   const refreshInterval = Number(raw.refreshInterval);
   const res = { id: raw.id, type: raw.type, label,
     refreshInterval: PROVIDER_REFRESH_OPTIONS.includes(refreshInterval) ? refreshInterval : DEFAULT_REFRESH_SECONDS };
   if (raw.agyMode) res.agyMode = raw.agyMode;
+  if (raw.copilotMode) res.copilotMode = raw.copilotMode;
   if (raw.wslDistro) res.wslDistro = raw.wslDistro;
   return res;
 }
@@ -241,4 +245,18 @@ export function badgeClass(status) {
   if (status === 'connected' || status === 'auth_check_required' || status === 'authenticating' || status === 'awaiting_code') return 'is-ready';
   if (status === 'temporary_error' || status === 'usage_unavailable' || status === 'unsupported_cli') return 'is-blocked';
   return '';
+}
+
+export function formatTimeRemaining(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
+  if (seconds >= 24 * 60 * 60) {
+    const days = Math.ceil(seconds / (24 * 60 * 60));
+    return `${days}d`;
+  }
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  return `${Math.max(1, minutes)}m`;
 }

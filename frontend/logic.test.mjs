@@ -28,6 +28,7 @@ import {
   retryDelay,
   shouldCountFailure,
   shouldShowProviderUser,
+  formatTimeRemaining,
   shouldKeepStaleData,
   shouldScheduleRetry,
 } from './logic.mjs';
@@ -211,6 +212,9 @@ test('a blank or missing label falls back to the provider type name', () => {
   assert.equal(normalizeProviderInstance({ id: 'a', type: 'codex', label: '   ' }).label, 'Codex');
   assert.equal(normalizeProviderInstance({ id: 'a', type: 'antigravity', agyMode: 'wsl' }).label, 'Antigravity (WSL)');
   assert.equal(normalizeProviderInstance({ id: 'a', type: 'antigravity', agyMode: 'wsl', wslDistro: 'Ubuntu' }).label, 'Antigravity (Ubuntu)');
+  assert.equal(normalizeProviderInstance({ id: 'a', type: 'copilot', copilotMode: 'wsl' }).label, 'GitHub');
+  assert.equal(normalizeProviderInstance({ id: 'a', type: 'copilot', copilotMode: 'wsl', wslDistro: 'Debian' }).label, 'GitHub (Debian)');
+  assert.equal(normalizeProviderInstance({ id: 'a', type: 'copilot', copilotMode: 'wsl' }).copilotMode, 'wsl');
 });
 
 test('providerTypeLabel names every known type and echoes back an unknown one', () => {
@@ -222,17 +226,20 @@ test('providerTypeLabel names every known type and echoes back an unknown one', 
   assert.equal(providerTypeLabel('gemini'), 'gemini');
 });
 
-test('account identifiers appear only when the same supported provider is registered more than once, or always for antigravity', () => {
+test('account identifiers appear only when the same supported provider is registered more than once, or always for antigravity and copilot', () => {
   const providers = [
     { id: 'c1', type: 'codex' },
     { id: 'c2', type: 'codex' },
     { id: 'a1', type: 'antigravity' },
+    { id: 'cp1', type: 'copilot' },
   ];
   assert.equal(shouldShowProviderUser(providers, 'codex', 'alex'), true);
   assert.equal(shouldShowProviderUser(providers, 'claude', 'ea24'), false);
   assert.equal(shouldShowProviderUser(providers, 'codex', ''), false);
   assert.equal(shouldShowProviderUser(providers, 'antigravity', 'user@gmail.com'), true);
   assert.equal(shouldShowProviderUser(providers, 'antigravity', ''), false);
+  assert.equal(shouldShowProviderUser(providers, 'copilot', 'user@github.com'), true);
+  assert.equal(shouldShowProviderUser(providers, 'copilot', ''), false);
 });
 
 test('a provider list keeps order, drops bad entries, and de-duplicates by id', () => {
@@ -354,3 +361,15 @@ for (const fixture of thresholdFixtures) {
     assert.deepEqual(normalizeConfig(config).thresholds, fixture.expected);
   });
 }
+
+test('formatTimeRemaining formats remaining time under and over 24 hours', () => {
+  assert.equal(formatTimeRemaining(null), '');
+  assert.equal(formatTimeRemaining(0), '');
+  assert.equal(formatTimeRemaining(-10), '');
+  assert.equal(formatTimeRemaining(30), '1m');
+  assert.equal(formatTimeRemaining(45 * 60), '45m');
+  assert.equal(formatTimeRemaining(3 * 3600), '3h');
+  assert.equal(formatTimeRemaining(4 * 3600 + 50 * 60), '4h 50m');
+  assert.equal(formatTimeRemaining(24 * 3600), '1d');
+  assert.equal(formatTimeRemaining(8 * 86400), '8d');
+});

@@ -3,6 +3,7 @@ import {
   shouldCountFailure, shouldScheduleRetry, isExpectedSetupState,
   shouldKeepStaleData, retryDelay, providerVisibilityAction,
   normalizeWindowWidth, providerTypeLabel, shouldShowProviderUser, DEFAULT_REFRESH_SECONDS,
+  formatTimeRemaining,
 } from '/logic.mjs';
 import { createDropdown } from '/ui/dropdown.mjs';
 
@@ -53,9 +54,12 @@ const RPC_BY_TYPE = {
 // per-card details the rendering code needs (RPC method names, the element
 // ids the card's pieces get, which render function draws its usage).
 function buildMeta(instance) {
+  const displayLabel = (instance.type === 'copilot' && instance.copilotMode === 'wsl')
+    ? 'GitHub'
+    : providerTypeLabel(instance.type);
   return {
     id: instance.id, type: instance.type, label: instance.label,
-    displayLabel: providerTypeLabel(instance.type),
+    displayLabel,
     ...RPC_BY_TYPE[instance.type],
     cardId: `provider-card-${instance.id}`,
     userId: `provider-user-${instance.id}`,
@@ -127,16 +131,6 @@ const formatClockTime = targetDate => [targetDate.getHours(), targetDate.getMinu
   .map(value => String(value).padStart(2, '0'))
   .join(':');
 
-const formatTimeRemaining = (seconds, targetDate) => {
-  if (!seconds || seconds <= 0 || !targetDate || Number.isNaN(targetDate.getTime())) return '';
-  const withinTwentyFourHours = seconds < 24 * 60 * 60;
-  if (withinTwentyFourHours) {
-    return formatClockTime(targetDate);
-  }
-  const days = Math.ceil(seconds / (24 * 60 * 60));
-  return `${days}d`;
-};
-
 // "Now", for reset-time math, is the moment this usage was fetched rather
 // than whenever it happens to be rendered - every DisplayUsage payload
 // (internal/providers) carries a `fetchedAt`, set right before that fetch
@@ -157,7 +151,7 @@ const formatResetAt = (resetTime, nowMs) => {
   const targetDate = new Date(resetTime);
   if (Number.isNaN(targetDate.getTime())) return '';
   const seconds = Math.max(0, Math.round((targetDate.getTime() - nowMs) / 1000));
-  return formatTimeRemaining(seconds, targetDate);
+  return formatTimeRemaining(seconds);
 };
 
 // Full date and time for hovering the reset-time text, e.g. "resets Sep 9 12:34".

@@ -961,10 +961,11 @@ button {
 .provider-add-target-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin: 0 0 14px;
   font-size: .75rem;
   color: var(--muted);
+  min-width: 0;
 }
 
 .provider-add-target-row[hidden] {
@@ -972,7 +973,10 @@ button {
 }
 
 .provider-add-target-row select {
-  font-size: .75rem;
+  font-size: .72rem;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .provider-target-badge {

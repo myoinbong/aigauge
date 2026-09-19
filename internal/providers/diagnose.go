@@ -154,8 +154,39 @@ func DiagnoseAntigravityWithTarget(tokenKey string, target AgyTarget) Diagnosis 
 }
 
 func DiagnoseCopilot(tokenKey string) Diagnosis {
+	return DiagnoseCopilotWithTarget(tokenKey, CopilotTarget{Mode: "oauth"})
+}
+
+func DiagnoseCopilotWithTarget(tokenKey string, target CopilotTarget) Diagnosis {
+	if target.Mode == "wsl" {
+		return diagnoseCopilotWsl(context.Background(), defaultDeps(), target)
+	}
 	diagnosis, _, _ := diagnoseCopilot(context.Background(), defaultDeps(), tokenKey, false)
 	return diagnosis
+}
+
+func diagnoseCopilotWsl(ctx context.Context, deps providerDeps, target CopilotTarget) Diagnosis {
+	res, err := runGhTarget(ctx, deps.runner, target, "auth", "status")
+	if err != nil {
+		return Diagnosis{
+			Status:  StatusNotInstalled,
+			Message: "GitHub CLI (gh) not found in WSL. Please install gh in your WSL distribution.",
+			Details: technicalDetails(err.Error()),
+		}
+	}
+	combined := res.Stdout + "\n" + res.Stderr
+	if res.ExitCode != 0 || strings.Contains(combined, "You are not logged into any GitHub hosts") || strings.Contains(combined, "no accounts configured") {
+		return Diagnosis{
+			Status:  StatusLoginRequired,
+			Message: "GitHub CLI is not logged in. Run 'gh auth login' in WSL.",
+			Details: technicalDetails(combined),
+		}
+	}
+	return Diagnosis{
+		Status:    StatusConnected,
+		Message:   "Connected to GitHub via WSL GH CLI.",
+		CanImport: false,
+	}
 }
 
 // diagnoseCopilot reports GitHub Copilot's readiness using stored tokens first.

@@ -493,8 +493,31 @@ func (a *App) DiagnoseAntigravity(instanceID string) providers.Diagnosis {
 	return providers.DiagnoseAntigravityWithTarget(instanceID, target)
 }
 
+func (a *App) copilotTargetForInstance(instanceID string) providers.CopilotTarget {
+	settings, err := a.loadSettings()
+	if err != nil {
+		return providers.CopilotTarget{Mode: "oauth"}
+	}
+	for _, p := range settings.Providers {
+		if p.ID == instanceID || instanceID == "" {
+			if p.Type == "copilot" {
+				mode := p.CopilotMode
+				if mode == "" {
+					mode = "oauth"
+				}
+				return providers.CopilotTarget{
+					Mode:      mode,
+					WslDistro: p.WslDistro,
+				}
+			}
+		}
+	}
+	return providers.CopilotTarget{Mode: "oauth"}
+}
+
 func (a *App) DiagnoseCopilot(instanceID string) providers.Diagnosis {
-	return providers.DiagnoseCopilot(instanceID)
+	target := a.copilotTargetForInstance(instanceID)
+	return providers.DiagnoseCopilotWithTarget(instanceID, target)
 }
 
 // GetXUsage performs the real, network-backed lookup for the provider
@@ -514,7 +537,8 @@ func (a *App) GetClaudeUsage(instanceID string) providers.DisplayUsage {
 }
 
 func (a *App) GetCopilotUsage(instanceID string) providers.DisplayUsage {
-	return providers.GetCopilotUsage(instanceID).ToDisplay()
+	target := a.copilotTargetForInstance(instanceID)
+	return providers.GetCopilotUsageWithTarget(instanceID, target).ToDisplay()
 }
 
 // ---------------------------------------------------------------------------
@@ -627,6 +651,32 @@ func (a *App) SetAntigravityConfig(instanceID string, agyMode string, wslDistro 
 					settings.Providers[i].Label = "Antigravity (WSL)"
 				} else if (agyMode == "" || agyMode == "native") && settings.Providers[i].Label == "Antigravity (WSL)" {
 					settings.Providers[i].Label = "Antigravity"
+				}
+				return nil
+			}
+		}
+		return fmt.Errorf("unknown provider instance %q", instanceID)
+	})
+}
+
+// SetCopilotConfig updates the connection mode and optional WSL distro for a GitHub Copilot instance.
+func (a *App) SetCopilotConfig(instanceID string, copilotMode string, wslDistro string) error {
+	if copilotMode != "" && copilotMode != "oauth" && copilotMode != "wsl" {
+		return fmt.Errorf("invalid copilot mode %q", copilotMode)
+	}
+	return a.updateSettings(func(settings *config.Settings) error {
+		for i := range settings.Providers {
+			if settings.Providers[i].ID == instanceID {
+				settings.Providers[i].CopilotMode = copilotMode
+				settings.Providers[i].WslDistro = strings.TrimSpace(wslDistro)
+				if copilotMode == "wsl" && (settings.Providers[i].Label == "GitHub Copilot" || settings.Providers[i].Label == "GitHub" || settings.Providers[i].Label == "" || strings.HasPrefix(settings.Providers[i].Label, "GitHub (")) {
+					if strings.TrimSpace(wslDistro) != "" {
+						settings.Providers[i].Label = "GitHub (" + strings.TrimSpace(wslDistro) + ")"
+					} else {
+						settings.Providers[i].Label = "GitHub"
+					}
+				} else if (copilotMode == "" || copilotMode == "oauth") && (settings.Providers[i].Label == "GitHub" || strings.HasPrefix(settings.Providers[i].Label, "GitHub (") || settings.Providers[i].Label == "GitHub Copilot (WSL)") {
+					settings.Providers[i].Label = "GitHub Copilot"
 				}
 				return nil
 			}

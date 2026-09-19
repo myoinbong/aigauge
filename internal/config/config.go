@@ -25,6 +25,9 @@ type ProviderInstance struct {
 	// Antigravity CLI execution configuration
 	AgyMode   string `json:"agyMode,omitempty"`   // "native" (default) or "wsl"
 	WslDistro string `json:"wslDistro,omitempty"` // optional WSL distro name
+
+	// GitHub Copilot execution configuration
+	CopilotMode string `json:"copilotMode,omitempty"` // "oauth" (default) or "wsl"
 }
 
 const DefaultRefreshInterval = 180

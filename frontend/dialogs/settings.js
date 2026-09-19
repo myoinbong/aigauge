@@ -52,8 +52,8 @@ async function refreshProviderUsers() {
   }
 
   const candidates = config.providers.filter(instance =>
-    !instance.pending && ['codex', 'claude', 'antigravity'].includes(instance.type) &&
-    (instance.type === 'antigravity' || config.providers.filter(other => other.type === instance.type).length > 1));
+    !instance.pending && ['codex', 'claude', 'antigravity', 'copilot'].includes(instance.type) &&
+    (instance.type === 'antigravity' || instance.type === 'copilot' || config.providers.filter(other => other.type === instance.type).length > 1));
   const results = await Promise.allSettled(candidates.map(async instance => ({
     id: instance.id,
     usage: await rpc(PROVIDER_TYPE_RPC[instance.type].usageRpcMethod, instance.id),
@@ -163,6 +163,9 @@ const providerAddDialogClose = document.getElementById('provider-add-dialog-clos
 const providerAddDialogAgyTarget = document.getElementById('provider-add-dialog-agy-target');
 const providerAddAgyMode = document.getElementById('provider-add-agy-mode');
 const providerAddAgyDistro = document.getElementById('provider-add-agy-distro');
+const providerAddDialogCopilotTarget = document.getElementById('provider-add-dialog-copilot-target');
+const providerAddCopilotMode = document.getElementById('provider-add-copilot-mode');
+const providerAddCopilotDistro = document.getElementById('provider-add-copilot-distro');
 
 const providerAddDialogActionClose = document.getElementById('provider-add-dialog-action-close');
 const confirmDialog = document.getElementById('confirm-dialog');
@@ -213,16 +216,28 @@ providerAddDialogClose.addEventListener('click', async () => {
   providerAddDialogSubmit.disabled = false;
   providerAddDialogActionClose.hidden = true;
   if (providerAddDialogAgyTarget) providerAddDialogAgyTarget.hidden = true;
+  if (providerAddDialogCopilotTarget) providerAddDialogCopilotTarget.hidden = true;
   if (providerFlowGeneration === closingGeneration) await reloadConfig();
 });
 providerAddDialogActionClose.addEventListener('click', () => {
   providerAddDialog.hidden = true;
   providerAddDialogActionClose.hidden = true;
   if (providerAddDialogAgyTarget) providerAddDialogAgyTarget.hidden = true;
+  if (providerAddDialogCopilotTarget) providerAddDialogCopilotTarget.hidden = true;
 });
 if (providerAddAgyMode && providerAddAgyDistro) {
   providerAddAgyMode.addEventListener('change', () => {
     providerAddAgyDistro.style.display = providerAddAgyMode.value === 'wsl' ? 'inline-block' : 'none';
+  });
+}
+if (providerAddCopilotMode && providerAddCopilotDistro) {
+  providerAddCopilotMode.addEventListener('change', () => {
+    const isWsl = providerAddCopilotMode.value === 'wsl';
+    providerAddCopilotDistro.style.display = isWsl ? 'inline-block' : 'none';
+    providerAddDialogLogin.textContent = isWsl ? 'Connect with WSL GH CLI' : 'Sign in with browser';
+    providerAddDialogStatus.textContent = isWsl
+      ? 'AI Gauge will query Copilot, Actions, and Codespaces usage through WSL GH CLI.'
+      : 'Connect to GitHub Copilot to view quota information.';
   });
 }
 providerAddDialogDeviceCopy.addEventListener('click', async () => {
@@ -342,6 +357,50 @@ providerAddDialogLogin.addEventListener('click', async () => {
       await saveSetting('SetAntigravityConfig', instance.id, mode, distro);
     } catch { /* continue */ }
     if (providerAddDialogAgyTarget) providerAddDialogAgyTarget.hidden = true;
+  }
+  if (provider === 'copilot') {
+    const mode = providerAddCopilotMode?.value || 'oauth';
+    const distro = mode === 'wsl' ? (providerAddCopilotDistro?.value || '') : '';
+    instance.copilotMode = mode;
+    instance.wslDistro = distro;
+    try {
+      await saveSetting('SetCopilotConfig', instance.id, mode, distro);
+    } catch { /* continue */ }
+    if (providerAddDialogCopilotTarget) providerAddDialogCopilotTarget.hidden = true;
+    if (mode === 'wsl') {
+      providerAddDialogLogin.hidden = true;
+      providerAddDialogImport.hidden = true;
+      providerAddDialogLogin.disabled = true;
+      providerAddDialogStatus.classList.add('is-loading');
+      providerAddDialogStatus.textContent = `Connecting to ${providerDisplayName(instance)} via WSL GH CLI…`;
+      try {
+        const diag = await rpc('DiagnoseCopilot', instance.id);
+        if (diag?.status !== 'connected') {
+          throw new Error(diag?.message || 'WSL GH CLI is not connected or logged in');
+        }
+        pendingProviderId = null;
+        addingProviders.delete(provider);
+        pendingLogin = null;
+        await rpc('CommitProviderInstance', instance.id);
+        providerAddDialog.hidden = true;
+        showToast(`${providerDisplayName(instance)} added successfully.`);
+      } catch (err) {
+        if (generation !== providerFlowGeneration || pendingLogin?.instance.id !== instance.id) return;
+        try { await rpc('RemoveProviderInstance', instance.id); } catch { /* cleanup */ }
+        pendingProviderId = null;
+        pendingLogin = null;
+        providerAddDialogStatus.textContent = `Could not connect to WSL GH CLI: ${err?.message || err}`;
+      } finally {
+        if (generation === providerFlowGeneration) {
+          providerAddDialogStatus.classList.remove('is-loading');
+          addingProviders.delete(provider);
+          providerAddDialogClose.disabled = false;
+          providerAddDialogLogin.disabled = false;
+          await reloadConfig();
+        }
+      }
+      return;
+    }
   }
   providerAddDialogLogin.hidden = true;
   providerAddDialogImport.hidden = true;
@@ -717,7 +776,7 @@ function renderProviderList() {
     nameLabel.className = 'provider-setting';
     const providerName = document.createElement('span');
     providerName.className = 'provider-setting-name';
-    providerName.textContent = providerTypeLabel(instance.type);
+    providerName.textContent = (instance.type === 'copilot' && instance.copilotMode === 'wsl') ? 'GitHub' : providerTypeLabel(instance.type);
     nameLabel.append(providerName);
     const user = providerUsers.get(instance.id) || '';
     if (shouldShowProviderUser(config.providers, instance.type, user)) {
@@ -801,6 +860,30 @@ function renderProviderList() {
       subRow.append(envLabel, targetBadge);
       providerListEl.append(subRow);
     }
+
+    if (instance.type === 'copilot') {
+      const subRow = document.createElement('div');
+      subRow.className = 'provider-subrow';
+      subRow.style.display = 'flex';
+      subRow.style.alignItems = 'center';
+      subRow.style.gap = '6px';
+      subRow.style.padding = '2px 0 6px 12px';
+      subRow.style.fontSize = '0.75rem';
+      subRow.style.color = 'var(--muted)';
+
+      const envLabel = document.createElement('span');
+      envLabel.textContent = 'Mode:';
+
+      const targetBadge = document.createElement('span');
+      targetBadge.className = 'provider-target-badge';
+      const targetText = instance.copilotMode === 'wsl'
+        ? (instance.wslDistro ? `WSL GH CLI (${instance.wslDistro})` : 'WSL GH CLI')
+        : 'GitHub Login';
+      targetBadge.textContent = targetText;
+
+      subRow.append(envLabel, targetBadge);
+      providerListEl.append(subRow);
+    }
   });
 
   providerAddButtonsEl.replaceChildren();
@@ -836,6 +919,7 @@ function renderProviderList() {
         providerAddDialogImport.hidden = true;
         providerAddDialogActionClose.hidden = true;
         if (providerAddDialogAgyTarget) providerAddDialogAgyTarget.hidden = true;
+        if (providerAddDialogCopilotTarget) providerAddDialogCopilotTarget.hidden = true;
         renderProviderList();
         try {
           const instance = await rpc('AddProviderInstance', provider);
@@ -873,6 +957,29 @@ function renderProviderList() {
             }
           } else {
             if (providerAddDialogAgyTarget) providerAddDialogAgyTarget.hidden = true;
+          }
+          if (provider === 'copilot') {
+            if (providerAddDialogCopilotTarget) {
+              providerAddDialogCopilotTarget.hidden = false;
+              if (providerAddCopilotMode) providerAddCopilotMode.value = 'oauth';
+              if (providerAddCopilotDistro) {
+                providerAddCopilotDistro.style.display = 'none';
+                providerAddCopilotDistro.replaceChildren();
+                rpc('GetWSLDistros').then(distros => {
+                  if (Array.isArray(distros) && distros.length > 0) {
+                    providerAddCopilotDistro.replaceChildren();
+                    for (const d of distros) {
+                      const name = typeof d === 'string' ? d : d.name;
+                      const isDef = typeof d === 'object' && d.isDefault;
+                      const label = isDef ? `${name} (*)` : name;
+                      providerAddCopilotDistro.add(new Option(label, name));
+                    }
+                  }
+                }).catch(() => {});
+              }
+            }
+          } else {
+            if (providerAddDialogCopilotTarget) providerAddDialogCopilotTarget.hidden = true;
           }
           providerAddDialogLogin.hidden = false;
           if (provider !== 'antigravity') {

@@ -107,6 +107,14 @@
           </select>
           <select id="provider-add-agy-distro" class="provider-refresh-select" style="display: none;"></select>
         </div>
+        <div id="provider-add-dialog-copilot-target" class="provider-add-target-row" hidden>
+          <label for="provider-add-copilot-mode">Mode:</label>
+          <select id="provider-add-copilot-mode" class="provider-refresh-select">
+            <option value="oauth">GitHub Login</option>
+            <option value="wsl">WSL GH CLI</option>
+          </select>
+          <select id="provider-add-copilot-distro" class="provider-refresh-select" style="display: none;"></select>
+        </div>
         <button id="provider-add-dialog-import" class="provider-add-dialog-choice" type="button" hidden>Try existing credentials</button>
         <button id="provider-add-dialog-login" class="provider-add-dialog-choice" type="button" hidden>Sign in with browser</button>
         <div id="provider-add-dialog-device-box" class="device-code-box" hidden>

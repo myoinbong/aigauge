@@ -118,3 +118,67 @@ func TestDiagnoseCopilot(t *testing.T) {
 		t.Errorf("diag with token active = %+v (ok=%v), want ok=true", diagActive, okActive)
 	}
 }
+
+func TestCopilotToDisplayWSLWithBilling(t *testing.T) {
+	data := readFixture(t, "copilot-usage.json")
+	usage, err := ParseCopilotUsage(data)
+	if err != nil {
+		t.Fatalf("ParseCopilotUsage() error = %v", err)
+	}
+	usage.Status = StatusConnected
+	usage.FetchedAt = "2026-09-20T12:00:00Z"
+	usage.HasActionsBilling = true
+	usage.ActionsIncludedMinutes = 2000
+	usage.ActionsMinutesUsed = 428
+	usage.HasCodespacesBilling = true
+	usage.CodespacesHoursUsed = 3.5
+
+	display := usage.ToDisplay()
+	if display.Status != StatusConnected {
+		t.Fatalf("display.Status = %q, want %q", display.Status, StatusConnected)
+	}
+	if len(display.Groups) != 3 {
+		t.Fatalf("display.Groups count = %d, want 3", len(display.Groups))
+	}
+
+	// Group 1: Copilot
+	if display.Groups[0].Name != "Copilot" || len(display.Groups[0].Buckets) != 1 {
+		t.Fatalf("group[0] = %+v, want Copilot", display.Groups[0])
+	}
+	b0 := display.Groups[0].Buckets[0]
+	if b0.Label != "monthly" || b0.Detail != "375/500" || b0.Remaining != 75.0 {
+		t.Errorf("b0 = %+v, want monthly with 375/500 and 75%%", b0)
+	}
+
+	// Group 2: GitHub Actions
+	if display.Groups[1].Name != "GitHub Actions" || len(display.Groups[1].Buckets) != 1 {
+		t.Fatalf("group[1] = %+v, want GitHub Actions", display.Groups[1])
+	}
+	b1 := display.Groups[1].Buckets[0]
+	if b1.Label != "monthly" || b1.Detail != "1572/2000m" || b1.Remaining != 78.6 {
+		t.Errorf("b1 = %+v, want monthly with 1572/2000m and 78.6%%", b1)
+	}
+
+	// Group 3: Codespace
+	if display.Groups[2].Name != "Codespace" || len(display.Groups[2].Buckets) != 1 {
+		t.Fatalf("group[2] = %+v, want Codespace", display.Groups[2])
+	}
+	b2 := display.Groups[2].Buckets[0]
+	if b2.Label != "monthly" || b2.Detail != "116/120h" || b2.Remaining != 97.1 {
+		t.Errorf("b2 = %+v, want monthly with 116/120h and 97.1%%", b2)
+	}
+}
+
+func TestBuildGhCommand(t *testing.T) {
+	targetOAuth := CopilotTarget{Mode: "oauth"}
+	exe, args := buildGhCommand(targetOAuth, "api", "/user")
+	if exe != "gh" || len(args) != 2 {
+		t.Errorf("buildGhCommand OAuth = %q, %v", exe, args)
+	}
+
+	targetWSL := CopilotTarget{Mode: "wsl", WslDistro: "Ubuntu"}
+	exeWSL, argsWSL := buildGhCommand(targetWSL, "api", "/user")
+	if exeWSL == "" || len(argsWSL) == 0 {
+		t.Errorf("buildGhCommand WSL failed: %q, %v", exeWSL, argsWSL)
+	}
+}

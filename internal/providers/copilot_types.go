@@ -2,6 +2,12 @@ package providers
 
 import "encoding/json"
 
+// CopilotTarget specifies how GitHub Copilot usage and billing metrics should be queried.
+type CopilotTarget struct {
+	Mode      string // "oauth" (default) or "wsl"
+	WslDistro string // optional WSL distro name
+}
+
 // CopilotUsage mirrors https://api.github.com/copilot_internal/user's response
 // format for quota and plan information, along with optional GitHub Actions
 // and Codespaces billing metrics.
@@ -10,11 +16,35 @@ type CopilotUsage struct {
 	QuotaResetDate string                          `json:"quota_reset_date"`
 	QuotaSnapshots map[string]CopilotQuotaSnapshot `json:"quota_snapshots"`
 	FetchedAt      string                          `json:"fetchedAt"`
+	User           string                          `json:"user,omitempty"`
+
+	// Additional billing metrics for WSL GH CLI mode
+	ActionsMinutesUsed      float64 `json:"actions_minutes_used,omitempty"`
+	ActionsIncludedMinutes  float64 `json:"actions_included_minutes,omitempty"`
+	HasActionsBilling       bool    `json:"has_actions_billing,omitempty"`
+	CodespacesHoursUsed     float64 `json:"codespaces_hours_used,omitempty"`
+	CodespacesIncludedHours float64 `json:"codespaces_included_hours,omitempty"`
+	HasCodespacesBilling    bool    `json:"has_codespaces_billing,omitempty"`
 
 	// Raw contains the untrimmed response body ParseCopilotUsage received.
 	Raw json.RawMessage `json:"-"`
 
 	DiagnosisFields
+}
+
+// GitHubBillingUsageItem mirrors an item from /users/{username}/settings/billing/usage/summary
+type GitHubBillingUsageItem struct {
+	Product       string  `json:"product"`
+	SKU           string  `json:"sku"`
+	UnitType      string  `json:"unitType"`
+	GrossQuantity float64 `json:"grossQuantity"`
+	NetQuantity   float64 `json:"netQuantity"`
+}
+
+// GitHubBillingUsageSummary mirrors /users/{username}/settings/billing/usage/summary
+type GitHubBillingUsageSummary struct {
+	User       string                   `json:"user"`
+	UsageItems []GitHubBillingUsageItem `json:"usageItems"`
 }
 
 // CopilotQuotaSnapshot represents the quota consumption state for an individual
