@@ -3,6 +3,7 @@ import {
   shouldCountFailure, shouldScheduleRetry, isExpectedSetupState,
   shouldKeepStaleData, retryDelay, providerVisibilityAction,
   normalizeWindowWidth, providerTypeLabel, shouldShowProviderUser, DEFAULT_REFRESH_SECONDS,
+  usageDetailRows,
 } from '/logic.mjs';
 import { createDropdown } from '/ui/dropdown.mjs';
 
@@ -21,7 +22,7 @@ if (globalThis.__AIGAUGE_LIVE__) {
 }
 
 const rpc = (method, ...args) =>
-  wails.Call.ByName(`github.com/jmnote/aigauge/internal/app.App.${method}`, ...args);
+  wails.Call.ByName(`github.com/jmnote/ai-gauge/internal/app.App.${method}`, ...args);
 
 // Pending instances belong to the settings window's in-progress add flow.
 // Keep them in the backend response so that flow can be committed or removed,
@@ -84,7 +85,7 @@ try {
   config = normalizeMainConfig(await rpc('GetSettings'));
 } catch (e) {
   console.warn('Failed to load settings:', e);
-    config = normalizeMainConfig({});
+  config = normalizeMainConfig({});
 }
 
 let settingsWriteQueue = Promise.resolve();
@@ -142,11 +143,11 @@ const formatTimeRemaining = (seconds, targetDate) => {
 // (internal/providers) carries a `fetchedAt`, set right before that fetch
 // went out. For a live fetch the two are milliseconds apart (network
 // latency, basically), so this changes nothing normal users would notice.
-  // It matters for the live-server fixture browser (hack/live-server.mjs), which
+// It matters for the live-server fixture browser (hack/live-server.mjs), which
 // serves whatever `.\build.ps1 fixtures-usage` last captured as-is, with no
 // correction - that can be arbitrarily old by the time it's viewed: without
 // anchoring to fetchedAt, an absolute reset time could drift into the past
-  // and render as already-elapsed.
+// and render as already-elapsed.
 function referenceNow(usage) {
   const fetchedAt = new Date(usage?.fetchedAt).getTime();
   return Number.isNaN(fetchedAt) ? Date.now() : fetchedAt;
@@ -190,6 +191,7 @@ function ensureProviderState(id) {
       displayName: '',
       plan: '',
       resetCredits: null,
+      usageDetails: [],
     });
   }
   return providerState.get(id);
@@ -219,6 +221,7 @@ function updateStatus(id, dotId, statusCardId, status, failureCount, lastSuccess
     ...(displayName ? [createTooltipRow('Display name', displayName)] : []),
     ...(plan ? [createTooltipRow('Plan', plan)] : []),
     ...(Number.isFinite(resetCredits) ? [createTooltipRow('Reset credits', `${resetCredits}`)] : []),
+    ...providerState.get(id).usageDetails.map(({ label, value }) => createTooltipRow(label, value)),
     createTooltipRow('Fetch fails', `${failureCount}`),
     createTooltipRow('Last fetch', successValue),
     ...(lastError ? [createTooltipRow('Last error', lastError)] : []),
@@ -607,6 +610,7 @@ function renderNonUsageState(id, usage) {
     state.email = '';
     state.displayName = '';
     state.resetCredits = null;
+    state.usageDetails = [];
     updateProviderUser(id);
     updateResetCredits(id);
     document.getElementById(meta.groupsId).replaceChildren();
@@ -635,6 +639,7 @@ function renderUsage(id, usage) {
   showProviderError(meta.errorId, '');
   state.plan = usage.plan || '';
   state.resetCredits = Number.isFinite(usage.resetCredits) ? usage.resetCredits : null;
+  state.usageDetails = usageDetailRows(usage.groups);
   updateResetCredits(id);
   updateProviderStatus(id);
   container.replaceChildren();
@@ -686,10 +691,7 @@ function appendGroupElement(container, name) {
   return groupElement;
 }
 
-// Each row gets its own tooltip (a sibling of .inline-reset within .limit,
-// not a child of it - .inline-reset has overflow:hidden for text truncation,
-// which would clip a tooltip nested inside it) showing just that row's own
-// full reset date-time, e.g. "Jan 1 (Fri) 00:00".
+// Reset times expand on hover; full amounts are available in the dot menu.
 function renderBucketRow(container, label, detail, remaining, resetTime, nowMs) {
   const clamped = Math.max(0, Math.min(100, remaining));
   const limit = document.createElement('div');
@@ -805,7 +807,7 @@ function toggleAlwaysOnTop() {
   isAlwaysOnTop = !isAlwaysOnTop;
   updateAlwaysOnTopUI(isAlwaysOnTop);
   wails.Window.SetAlwaysOnTop(isAlwaysOnTop);
-  wails.Call.ByName('github.com/jmnote/aigauge/internal/app.App.SetAlwaysOnTop', isAlwaysOnTop).catch(() => { });
+  wails.Call.ByName('github.com/jmnote/ai-gauge/internal/app.App.SetAlwaysOnTop', isAlwaysOnTop).catch(() => { });
 }
 
 pinWindowBtn.addEventListener('click', toggleAlwaysOnTop);
@@ -993,7 +995,7 @@ function applyTheme(theme, persist = true) {
 
 let forcedTheme = '';
 try {
-  forcedTheme = await wails.Call.ByName('github.com/jmnote/aigauge/internal/app.App.GetThemeOverride');
+  forcedTheme = await wails.Call.ByName('github.com/jmnote/ai-gauge/internal/app.App.GetThemeOverride');
 } catch (error) {
   console.warn('Unable to read the theme override:', error);
 }
@@ -1134,7 +1136,7 @@ async function connectExistingInstance(id, diagnosis) {
 }
 
 document.getElementById('hide-window').addEventListener('click', () => {
-  wails.Call.ByName('github.com/jmnote/aigauge/internal/app.App.HideToTray').catch(() => wails.Window.Hide());
+  wails.Call.ByName('github.com/jmnote/ai-gauge/internal/app.App.HideToTray').catch(() => wails.Window.Hide());
 });
 
 let lastReportedHeight = 0;
@@ -1159,7 +1161,7 @@ function requestWindowResize() {
       lastReportedHeight = height;
       // The backend preserves the window's current user-selected width and
       // changes only its height to fit the reflowed content.
-      wails.Call.ByName('github.com/jmnote/aigauge/internal/app.App.SetContentHeight', height).catch(() => { });
+      wails.Call.ByName('github.com/jmnote/ai-gauge/internal/app.App.SetContentHeight', height).catch(() => { });
     }
   });
 }
@@ -1219,18 +1221,17 @@ document.addEventListener('keydown', event => {
   }
 });
 
-// .inline-reset elements swap their text content in place to the full date
-// on mouse hover, and revert back on mouse out.
+// Reset times show their full text on hover and revert on mouse out.
 document.addEventListener('mouseover', event => {
-  const reset = event.target.closest?.('.inline-reset');
-  if (reset && !reset.contains(event.relatedTarget) && reset.dataset.hoverText) {
-    reset.textContent = reset.dataset.hoverText;
+  const element = event.target.closest?.('[data-hover-text]');
+  if (element && !element.contains(event.relatedTarget)) {
+    element.textContent = element.dataset.hoverText;
   }
 });
 document.addEventListener('mouseout', event => {
-  const reset = event.target.closest?.('.inline-reset');
-  if (reset && !reset.contains(event.relatedTarget) && reset.dataset.defaultText) {
-    reset.textContent = reset.dataset.defaultText;
+  const element = event.target.closest?.('[data-hover-text]');
+  if (element && !element.contains(event.relatedTarget) && element.dataset.defaultText) {
+    element.textContent = element.dataset.defaultText;
   }
 });
 
